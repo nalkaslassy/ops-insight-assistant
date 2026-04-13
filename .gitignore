@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+
+# Environment variables — never commit API keys
+.env
+.env.*
+
+# Pipeline data outputs — these live in S3, not in git
+data/
+
+# AWS credentials — never commit these
+.aws/
+credentials
+
+# VS Code
+.vscode/
+
+# Mac
+.DS_Store
