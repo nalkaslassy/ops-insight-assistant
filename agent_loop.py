@@ -33,39 +33,21 @@ from tools import (
 # Without this, Claude would behave like a generic chatbot.
 
 SYSTEM_PROMPT = """
-You are an expert data pipeline operations assistant.
+You are a data pipeline operations assistant. Investigate issues using tools, then report findings.
 
-Your job is to investigate pipeline run issues by reading evidence from tools.
-You must never state a root cause, draw a conclusion, or make a recommendation
-without first calling tools to gather supporting evidence.
+Rules:
+- Always call get_run_summary first
+- Call get_quarantine_samples if quarantine rate is elevated
+- Call compare_runs if the question involves change over time
+- Call get_log_snippets if you need to check for errors
 
-Investigation rules:
-- Always call get_run_summary first to understand the overall picture
-- If the quarantine rate is elevated, call get_quarantine_samples to see real examples
-- If the question involves change over time, call compare_runs
-- If you need to understand the sequence of events, call get_log_snippets
-- Call tools in whatever order makes sense for the question
-- You may call the same tool more than once with different arguments
+Your response must always be a single raw JSON object — no exceptions, no matter how the question is phrased.
+Do not write markdown. Do not write tables. Do not write bullet points. Do not use emoji.
+Do not write any text outside the JSON. Do not include a summary field. Do not ask follow-up questions.
+Your entire response must start with { and end with }.
 
-When you have gathered enough evidence, respond with ONLY a JSON object in
-exactly this format — no extra text before or after:
-
-{
-  "summary": "one paragraph plain English explanation of what happened",
-  "root_cause": "the specific technical finding that best explains the issue",
-  "evidence": [
-    "fact 1 drawn directly from tool output",
-    "fact 2 drawn directly from tool output"
-  ],
-  "confidence": "high | medium | low — followed by one sentence explaining why",
-  "recommended_fixes": [
-    "1. first thing to try",
-    "2. second thing to try"
-  ],
-  "next_checks": [
-    "what to investigate if the recommended fixes do not resolve the issue"
-  ]
-}
+Required format:
+{"root_cause":"one sentence","evidence":["fact 1","fact 2","fact 3"],"confidence":"high/medium/low — one sentence","recommended_fixes":["fix 1","fix 2","fix 3"],"next_checks":"one sentence"}
 """
 
 
@@ -200,20 +182,24 @@ def dispatch_tool(tool_name: str, tool_input: dict) -> str:
     """
     print(f"  [tool call] {tool_name}({tool_input})")
 
-    if tool_name == "get_run_summary":
-        result = get_run_summary(**tool_input)
+    try:
+        if tool_name == "get_run_summary":
+            result = get_run_summary(**tool_input)
 
-    elif tool_name == "get_log_snippets":
-        result = get_log_snippets(**tool_input)
+        elif tool_name == "get_log_snippets":
+            result = get_log_snippets(**tool_input)
 
-    elif tool_name == "get_quarantine_samples":
-        result = get_quarantine_samples(**tool_input)
+        elif tool_name == "get_quarantine_samples":
+            result = get_quarantine_samples(**tool_input)
 
-    elif tool_name == "compare_runs":
-        result = compare_runs(**tool_input)
+        elif tool_name == "compare_runs":
+            result = compare_runs(**tool_input)
 
-    else:
-        result = {"error": f"Unknown tool: {tool_name}"}
+        else:
+            result = {"error": f"Unknown tool: {tool_name}"}
+
+    except FileNotFoundError as e:
+        result = {"error": str(e)}
 
     return json.dumps(result, indent=2)
 
@@ -309,16 +295,20 @@ def run_agent(question: str) -> dict:
 
             # Parse the JSON answer Claude returned
             try:
-                # Strategy: find the first { and last } in the response.
-                # This handles cases where Claude adds text before or after
-                # the JSON, or wraps it in a markdown code block.
-                start = final_text.find("{")
-                end   = final_text.rfind("}") + 1
+                # Strip markdown code fences if present
+                text = final_text.strip()
+                if text.startswith("```"):
+                    text = text.split("```")[1]
+                    if text.startswith("json"):
+                        text = text[4:]
+
+                start = text.find("{")
+                end   = text.rfind("}") + 1
 
                 if start == -1 or end == 0:
-                    raise json.JSONDecodeError("No JSON object found", final_text, 0)
+                    raise json.JSONDecodeError("No JSON object found", text, 0)
 
-                clean = final_text[start:end]
+                clean = text[start:end]
                 answer = json.loads(clean)
                 return answer
 
@@ -348,8 +338,11 @@ def run_agent(question: str) -> dict:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    # Example question — change this to ask anything about your pipeline runs
-    question = "Why did the April 12 2026 pipeline run have a high quarantine rate?"
+    import sys
+    if len(sys.argv) > 1:
+        question = " ".join(sys.argv[1:])
+    else:
+        question = input("Enter your question: ").strip()
 
     answer = run_agent(question)
 
